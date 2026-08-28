@@ -1,38 +1,48 @@
 import json
 import urllib.request
-from datetime import datetime, timezone
 
-# ==========================================
-# BTC 15M SIGNAL BOT
-# Solo devuelve: SUBE o BAJA
-# ==========================================
 
 def get_btc_data():
-    url = (
-        "https://api.binance.com/api/v3/klines"
-        "?symbol=BTCUSDT&interval=1m&limit=60"
-    )
+    url = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1"
 
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "BTC-15M-Bot"}
+        headers={"User-Agent": "BTC-15M-Bot/1.0"}
     )
 
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return json.loads(response.read().decode())
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = json.loads(response.read().decode())
+
+    if data["error"]:
+        raise Exception(str(data["error"]))
+
+    result = data["result"]
+
+    pair_key = [key for key in result.keys() if key != "last"][0]
+
+    candles = result[pair_key]
+
+    return candles[-60:]
 
 
 def ema(values, period):
+    if len(values) < period:
+        return sum(values) / len(values)
+
     multiplier = 2 / (period + 1)
-    result = values[0]
 
-    for price in values[1:]:
-        result = (price - result) * multiplier + result
+    value = sum(values[:period]) / period
 
-    return result
+    for price in values[period:]:
+        value = (price - value) * multiplier + value
+
+    return value
 
 
-def rsi(values, period=14):
+def calculate_rsi(values, period=14):
+    if len(values) <= period:
+        return 50
+
     gains = []
     losses = []
 
@@ -46,9 +56,6 @@ def rsi(values, period=14):
             gains.append(0)
             losses.append(abs(change))
 
-    if len(gains) < period:
-        return 50
-
     avg_gain = sum(gains[-period:]) / period
     avg_loss = sum(losses[-period:]) / period
 
@@ -56,83 +63,87 @@ def rsi(values, period=14):
         return 100
 
     rs = avg_gain / avg_loss
+
     return 100 - (100 / (1 + rs))
 
 
-def analyze():
+def analyze_btc():
     candles = get_btc_data()
 
     closes = [float(candle[4]) for candle in candles]
-    volumes = [float(candle[5]) for candle in candles]
+    volumes = [float(candle[6]) for candle in candles]
 
-    current_price = closes[-1]
+    if len(closes) < 30:
+        raise Exception("No hay suficientes datos de BTC.")
 
-    # Tendencias
-    ema_5 = ema(closes[-5:], 5)
-    ema_15 = ema(closes[-15:], 15)
-    ema_30 = ema(closes[-30:], 30)
+    price = closes[-1]
 
-    # RSI
-    current_rsi = rsi(closes)
+    ema_5 = ema(closes, 5)
+    ema_15 = ema(closes, 15)
+    ema_30 = ema(closes, 30)
 
-    # Momentum
-    momentum_5 = ((closes[-1] - closes[-6]) / closes[-6]) * 100
-    momentum_15 = ((closes[-1] - closes[-16]) / closes[-16]) * 100
+    rsi = calculate_rsi(closes)
 
-    # Volumen
+    momentum_5 = (
+        (price - closes[-6]) / closes[-6]
+    ) * 100
+
+    momentum_15 = (
+        (price - closes[-16]) / closes[-16]
+    ) * 100
+
     recent_volume = sum(volumes[-5:]) / 5
-    old_volume = sum(volumes[-20:-5]) / 15
+    previous_volume = sum(volumes[-20:-5]) / 15
 
     score = 0
 
-    # EMA
+    # Tendencia corta
     if ema_5 > ema_15:
         score += 2
     else:
         score -= 2
 
+    # Tendencia general
     if ema_15 > ema_30:
         score += 2
     else:
         score -= 2
 
-    # Momentum
+    # Momentum corto
     if momentum_5 > 0:
         score += 2
     else:
         score -= 2
 
+    # Momentum de 15 minutos
     if momentum_15 > 0:
         score += 2
     else:
         score -= 2
 
     # RSI
-    if current_rsi > 50:
+    if rsi >= 50:
         score += 1
     else:
         score -= 1
 
     # Volumen
-    if recent_volume > old_volume:
+    if recent_volume > previous_volume:
         if momentum_5 > 0:
             score += 1
         else:
             score -= 1
 
-    # Decisión final
     if score >= 0:
-        signal = "SUBE"
-    else:
-        signal = "BAJA"
+        return "SUBE"
 
-    return signal
+    return "BAJA"
 
 
 def main():
-    signal = analyze()
+    signal = analyze_btc()
 
-    # ÚNICO DATO QUE ENTREGA EL BOT
+    # ESTA ES LA UNICA RESPUESTA DEL BOT
     print(signal)
 
 
